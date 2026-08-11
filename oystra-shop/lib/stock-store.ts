@@ -1,0 +1,153 @@
+// =============================================================
+// GESTION DU STOCK (côté serveur) — soustraction à chaque commande
+// =============================================================
+// Deux modes de stockage, choisis automatiquement :
+//
+//  1) Vercel KV / Upstash (RECOMMANDÉ EN PROD, persistant et partagé) :
+//     active-le en ajoutant dans Vercel les variables d'environnement
+//     KV_REST_API_URL et KV_REST_API_TOKEN (Storage > KV, gratuit).
+//     -> le stock survit aux redéploiements et est commun à tous les visiteurs.
+//
+//  2) Fichier (par défaut, sans config) : le stock de départ est lu dans
+//     data/stock.json, puis les soustractions sont écrites dans /tmp.
+//     -> fonctionne en local et en prod, mais se réinitialise au prochain
+//        "cold start" du serveur. Parfait pour démarrer / petites séries.
+//
+// Le reste du site n'a pas à savoir lequel est utilisé.
+// =============================================================
+
+import { promises as fs } from "fs";
+import path from "path";
+import { SIZES, Size, PRODUCTS } from "./products";
+
+export type StockMap = Record<string, Record<Size, number>>;
+
+const KV_URL = process.env.KV_REST_API_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+const USE_KV = Boolean(KV_URL && KV_TOKEN);
+const KV_KEY = "oystra:stock";
+const TMP_FILE = path.join("/tmp", "oystra-stock.json");
+const SEED_FILE = path.join(process.cwd(), "data", "stock.json");
+
+function emptySeed(): StockMap {
+  const m: StockMap = {};
+  for (const p of PRODUCTS) {
+    m[p.slug] = SIZES.reduce(
+      (acc, s) => ({ ...acc, [s]: p.stock[s] }),
+      {} as Record<Size, number>
+    );
+  }
+  return m;
+}
+
+async function readSeed(): Promise<StockMap> {
+  try {
+    return JSON.parse(await fs.readFile(SEED_FILE, "utf8")) as StockMap;
+  } catch {
+    return emptySeed();
+  }
+}
+
+// ---------- backend Vercel KV (REST) ----------
+async function kvGet(): Promise<StockMap | null> {
+  try {
+    const r = await fetch(`${KV_URL}/get/${KV_KEY}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      cache: "no-store",
+    });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { result?: string | null };
+    return j.result ? (JSON.parse(j.result) as StockMap) : null;
+  } catch {
+    return null;
+  }
+}
+async function kvSet(m: StockMap): Promise<void> {
+  try {
+    await fetch(`${KV_URL}/set/${KV_KEY}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${KV_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(m),
+    });
+  } catch {
+    /* silencieux */
+  }
+}
+
+// ---------- backend fichier (/tmp) ----------
+async function fileGet(): Promise<StockMap | null> {
+  try {
+    return JSON.parse(await fs.readFile(TMP_FILE, "utf8")) as StockMap;
+  } catch {
+    return null;
+  }
+}
+async function fileSet(m: StockMap): Promise<void> {
+  try {
+    await fs.writeFile(TMP_FILE, JSON.stringify(m));
+  } catch {
+    /* /tmp indisponible : on ignore */
+  }
+}
+
+async function load(): Promise<StockMap> {
+  const current = USE_KV ? await kvGet() : await fileGet();
+  if (current) return current;
+  const seed = await readSeed();
+  if (USE_KV) await kvSet(seed);
+  else await fileSet(seed);
+  return seed;
+}
+
+async function save(m: StockMap): Promise<void> {
+  if (USE_KV) await kvSet(m);
+  else await fileSet(m);
+}
+
+export async function getStock(): Promise<StockMap> {
+  return load();
+}
+
+export interface OrderItem {
+  slug: string;
+  size: Size;
+  quantity: number;
+}
+
+export interface OrderResult {
+  ok: boolean;
+  stock: StockMap;
+  error?: string;
+}
+
+// Valide la disponibilité PUIS soustrait. Atomique côté logique :
+// si une seule ligne manque de stock, rien n'est décrémenté.
+export async function commitOrder(items: OrderItem[]): Promise<OrderResult> {
+  const stock = await load();
+
+  for (const it of items) {
+    if (!it.quantity || it.quantity <= 0) continue;
+    const available = stock[it.slug]?.[it.size];
+    if (available === undefined) {
+      return { ok: false, stock, error: `Produit inconnu : ${it.slug}.` };
+    }
+    if (available < it.quantity) {
+      return {
+        ok: false,
+        stock,
+        error: `Stock insuffisant (${it.slug} · ${it.size}) : il en reste ${available}.`,
+      };
+    }
+  }
+
+  for (const it of items) {
+    if (!it.quantity || it.quantity <= 0) continue;
+    stock[it.slug][it.size] -= it.quantity;
+  }
+
+  await save(stock);
+  return { ok: true, stock };
+}
