@@ -11,7 +11,7 @@
 //    ⚠️ Tu n'es pas obligé de repasser à false le 15 août :
 //    dès que la date ci-dessous est atteinte, la boutique s'ouvre
 //    automatiquement (la page se rafraîchit toute seule).
-export const TEASER_MODE = true;
+export const TEASER_MODE = false;
 
 // 2) DATE DU DROP — 15 août 2026 à 00h00, heure de Paris (+02:00 en été).
 export const DROP_ISO = "2026-08-15T00:00:00+02:00";
