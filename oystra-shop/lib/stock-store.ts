@@ -111,6 +111,34 @@ export async function getStock(): Promise<StockMap> {
   return load();
 }
 
+// Écrit un stock complet (valeurs absolues). Utilisé par la page de gestion.
+export async function setStock(next: StockMap): Promise<StockMap> {
+  const clean: StockMap = {};
+  for (const p of PRODUCTS) {
+    clean[p.slug] = SIZES.reduce((acc, s) => {
+      const v = Number(next?.[p.slug]?.[s]);
+      acc[s] = Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+      return acc;
+    }, {} as Record<Size, number>);
+  }
+  await save(clean);
+  return clean;
+}
+
+// Ajuste une case de ±delta (ex : -1 pour une vente en physique). Ne descend pas sous 0.
+export async function adjustStock(
+  slug: string,
+  size: Size,
+  delta: number
+): Promise<StockMap> {
+  const stock = await load();
+  if (stock[slug] && stock[slug][size] !== undefined) {
+    stock[slug][size] = Math.max(0, stock[slug][size] + Math.floor(delta));
+    await save(stock);
+  }
+  return stock;
+}
+
 export interface OrderItem {
   slug: string;
   size: Size;
