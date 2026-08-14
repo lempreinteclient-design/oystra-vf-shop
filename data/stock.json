@@ -1,5 +1,5 @@
 {
-  "tee-blanc-bleu":   { "XS": 5, "S": 5, "M": 5, "L": 5, "XL": 5 },
-  "tee-blanc-orange": { "XS": 5, "S": 5, "M": 5, "L": 5, "XL": 5 },
-  "tee-rose-rouge":   { "XS": 5, "S": 5, "M": 5, "L": 5, "XL": 5 }
+  "tee-blanc-bleu":   { "XS": 10, "S": 10, "M": 10, "L": 0, "XL": 0 },
+  "tee-blanc-orange": { "XS": 10, "S": 10, "M": 10, "L": 0, "XL": 0 },
+  "tee-rose-rouge":   { "XS": 9, "S": 11, "M": 11, "L": 2, "XL": 0 }
 }
