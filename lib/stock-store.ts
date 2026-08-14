@@ -1,20 +1,6 @@
 // =============================================================
 // GESTION DU STOCK (côté serveur) — soustraction à chaque commande
 // =============================================================
-// Deux modes de stockage, choisis automatiquement :
-//
-//  1) Vercel KV / Upstash (RECOMMANDÉ EN PROD, persistant et partagé) :
-//     active-le en ajoutant dans Vercel les variables d'environnement
-//     KV_REST_API_URL et KV_REST_API_TOKEN (Storage > KV, gratuit).
-//     -> le stock survit aux redéploiements et est commun à tous les visiteurs.
-//
-//  2) Fichier (par défaut, sans config) : le stock de départ est lu dans
-//     data/stock.json, puis les soustractions sont écrites dans /tmp.
-//     -> fonctionne en local et en prod, mais se réinitialise au prochain
-//        "cold start" du serveur. Parfait pour démarrer / petites séries.
-//
-// Le reste du site n'a pas à savoir lequel est utilisé.
-// =============================================================
 
 import { promises as fs } from "fs";
 import path from "path";
@@ -48,7 +34,6 @@ async function readSeed(): Promise<StockMap> {
   }
 }
 
-// ---------- backend Vercel KV (REST) ----------
 async function kvGet(): Promise<StockMap | null> {
   try {
     const r = await fetch(`${KV_URL}/get/${KV_KEY}`, {
@@ -77,7 +62,6 @@ async function kvSet(m: StockMap): Promise<void> {
   }
 }
 
-// ---------- backend fichier (/tmp) ----------
 async function fileGet(): Promise<StockMap | null> {
   try {
     return JSON.parse(await fs.readFile(TMP_FILE, "utf8")) as StockMap;
@@ -111,6 +95,34 @@ export async function getStock(): Promise<StockMap> {
   return load();
 }
 
+// Écrit un stock complet (valeurs absolues). Utilisé par la page de gestion.
+export async function setStock(next: StockMap): Promise<StockMap> {
+  const clean: StockMap = {};
+  for (const p of PRODUCTS) {
+    clean[p.slug] = SIZES.reduce((acc, s) => {
+      const v = Number(next?.[p.slug]?.[s]);
+      acc[s] = Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0;
+      return acc;
+    }, {} as Record<Size, number>);
+  }
+  await save(clean);
+  return clean;
+}
+
+// Ajuste une case de ±delta (ex : -1 pour une vente en physique). Ne descend pas sous 0.
+export async function adjustStock(
+  slug: string,
+  size: Size,
+  delta: number
+): Promise<StockMap> {
+  const stock = await load();
+  if (stock[slug] && stock[slug][size] !== undefined) {
+    stock[slug][size] = Math.max(0, stock[slug][size] + Math.floor(delta));
+    await save(stock);
+  }
+  return stock;
+}
+
 export interface OrderItem {
   slug: string;
   size: Size;
@@ -123,8 +135,7 @@ export interface OrderResult {
   error?: string;
 }
 
-// Valide la disponibilité PUIS soustrait. Atomique côté logique :
-// si une seule ligne manque de stock, rien n'est décrémenté.
+// Valide la disponibilité PUIS soustrait.
 export async function commitOrder(items: OrderItem[]): Promise<OrderResult> {
   const stock = await load();
 
